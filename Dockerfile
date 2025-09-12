@@ -6,9 +6,7 @@ ARG COMFYUI_VERSION=latest
 ARG CUDA_VERSION_FOR_COMFY
 ARG ENABLE_PYTORCH_UPGRADE=false
 ARG PYTORCH_INDEX_URL
-
-# 🔥 HARDCODED TOKEN - REPLACE WITH YOUR ACTUAL TOKEN 🔥
-ENV HUGGINGFACE_ACCESS_TOKEN=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
+ARG HUGGINGFACE_ACCESS_TOKEN
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PIP_PREFER_BINARY=1
@@ -74,28 +72,59 @@ CMD ["/start.sh"]
 
 FROM base AS downloader
 
+ARG HUGGINGFACE_ACCESS_TOKEN
+
 WORKDIR /comfyui
 RUN mkdir -p models/unet models/clip models/clip_vision models/vae
 
-# Token verification - will fail build if token is still placeholder
-RUN if [ "$HUGGINGFACE_ACCESS_TOKEN" = "hf_your_actual_token_here_replace_this" ]; then \
-      echo "ERROR: Please replace the hardcoded token in the Dockerfile!"; \
-      echo "Change 'hf_your_actual_token_here_replace_this' to your actual HuggingFace token"; \
+# Validate token
+RUN if [ -z "$HUGGINGFACE_ACCESS_TOKEN" ]; then \
+      echo "ERROR: HUGGINGFACE_ACCESS_TOKEN build arg is required!"; \
       exit 1; \
     fi
 
-# Download models with hardcoded token
-RUN wget -q --header="Authorization: Bearer ${HUGGINGFACE_ACCESS_TOKEN}" -O models/unet/wan2.1-i2v-14b-480p-Q8_0.gguf https://huggingface.co/city96/Wan2.1-I2V-14B-480P-gguf/resolve/main/wan2.1-i2v-14b-480p-Q8_0.gguf || \
-    (echo "Failed to download model - check your token!" && exit 1)
-
-RUN wget -q --header="Authorization: Bearer ${HUGGINGFACE_ACCESS_TOKEN}" -O models/clip/umt5_xxl_fp8_e4m3fn_scaled.safetensors https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/clip/umt5_xxl_fp8_e4m3fn_scaled.safetensors || \
-    (echo "Failed to download CLIP model - check your token!" && exit 1)
-
-RUN wget -q --header="Authorization: Bearer ${HUGGINGFACE_ACCESS_TOKEN}" -O models/clip_vision/clip_vision_h.safetensors https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/clip_vision/clip_vision_h.safetensors || \
-    (echo "Failed to download CLIP Vision model - check your token!" && exit 1)
-
-RUN wget -q --header="Authorization: Bearer ${HUGGINGFACE_ACCESS_TOKEN}" -O models/vae/wan_2.1_vae.safetensors https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/vae/wan_2.1_vae.safetensors || \
-    (echo "Failed to download VAE model - check your token!" && exit 1)
+# Download models with progress and error handling
+RUN echo "🚀 Starting model downloads..." && \
+    \
+    echo "📥 [1/4] Downloading UNet model (largest - ~8GB)..." && \
+    wget --progress=bar:force --header="Authorization: Bearer ${HUGGINGFACE_ACCESS_TOKEN}" \
+         --timeout=600 --tries=3 \
+         -O models/unet/wan2.1-i2v-14b-480p-Q8_0.gguf \
+         "https://huggingface.co/city96/Wan2.1-I2V-14B-480P-gguf/resolve/main/wan2.1-i2v-14b-480p-Q8_0.gguf" && \
+    echo "✅ UNet model downloaded successfully" && \
+    \
+    echo "📥 [2/4] Downloading CLIP model..." && \
+    wget --progress=bar:force --header="Authorization: Bearer ${HUGGINGFACE_ACCESS_TOKEN}" \
+         --timeout=300 --tries=3 \
+         -O models/clip/umt5_xxl_fp8_e4m3fn_scaled.safetensors \
+         "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/clip/umt5_xxl_fp8_e4m3fn_scaled.safetensors" && \
+    echo "✅ CLIP model downloaded successfully" && \
+    \
+    echo "📥 [3/4] Downloading CLIP Vision model..." && \
+    wget --progress=bar:force --header="Authorization: Bearer ${HUGGINGFACE_ACCESS_TOKEN}" \
+         --timeout=300 --tries=3 \
+         -O models/clip_vision/clip_vision_h.safetensors \
+         "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/clip_vision/clip_vision_h.safetensors" && \
+    echo "✅ CLIP Vision model downloaded successfully" && \
+    \
+    echo "📥 [4/4] Downloading VAE model..." && \
+    wget --progress=bar:force --header="Authorization: Bearer ${HUGGINGFACE_ACCESS_TOKEN}" \
+         --timeout=300 --tries=3 \
+         -O models/vae/wan_2.1_vae.safetensors \
+         "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/vae/wan_2.1_vae.safetensors" && \
+    echo "✅ VAE model downloaded successfully" && \
+    \
+    echo "🎉 All models downloaded successfully!" && \
+    \
+    # Verify file sizes
+    echo "📊 Model file sizes:" && \
+    du -h models/unet/wan2.1-i2v-14b-480p-Q8_0.gguf && \
+    du -h models/clip/umt5_xxl_fp8_e4m3fn_scaled.safetensors && \
+    du -h models/clip_vision/clip_vision_h.safetensors && \
+    du -h models/vae/wan_2.1_vae.safetensors
 
 FROM base AS final
 COPY --from=downloader /comfyui/models /comfyui/models
+
+# Final image cleanup - remove any token traces
+ENV HUGGINGFACE_ACCESS_TOKEN=""
