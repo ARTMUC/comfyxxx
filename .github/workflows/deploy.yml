@@ -21,7 +21,7 @@ env:
 
 jobs:
   build-and-push:
-    runs-on: gpu-linux-1  # GitHub GPU runner
+    runs-on: ubuntu-latest  # GitHub GPU runner
     timeout-minutes: 120  # 2 hours for large downloads
 
     steps:
