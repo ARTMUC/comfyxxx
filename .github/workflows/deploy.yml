@@ -16,12 +16,13 @@ on:
       - '.github/workflows/**'
 
 env:
-  AWS_REGION: us-east-1
+  AWS_REGION: eu-west-1
   ECR_REPOSITORY: comfyui-wan
 
 jobs:
   build-and-push:
     runs-on: ubuntu-latest  # GitHub GPU runner
+    environment: AWS_ACCESS_KEY_ID
     timeout-minutes: 120  # 2 hours for large downloads
 
     steps:
