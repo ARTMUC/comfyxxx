@@ -1,12 +1,10 @@
 ARG BASE_IMAGE=nvidia/cuda:12.6.3-cudnn-runtime-ubuntu24.04
-
 FROM ${BASE_IMAGE} AS base
 
 ARG COMFYUI_VERSION=latest
 ARG CUDA_VERSION_FOR_COMFY
 ARG ENABLE_PYTORCH_UPGRADE=false
 ARG PYTORCH_INDEX_URL
-ARG HUGGINGFACE_ACCESS_TOKEN
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PIP_PREFER_BINARY=1
@@ -14,11 +12,14 @@ ENV PYTHONUNBUFFERED=1
 ENV CMAKE_BUILD_PARALLEL_LEVEL=8
 ENV PIP_NO_INPUT=1
 
+# --- system packages ---
 RUN apt-get update && apt-get install -y \
     python3.12 \
     python3.12-venv \
     git \
     wget \
+    curl \
+    unzip \
     libgl1 \
     libglib2.0-0 \
     libsm6 \
@@ -29,6 +30,7 @@ RUN apt-get update && apt-get install -y \
     && ln -sf /usr/bin/pip3 /usr/bin/pip \
     && apt-get autoremove -y && apt-get clean -y && rm -rf /var/lib/apt/lists/*
 
+# --- uv (virtualenv manager) ---
 RUN wget -qO- https://astral.sh/uv/install.sh | sh \
     && ln -s /root/.local/bin/uv /usr/local/bin/uv \
     && ln -s /root/.local/bin/uvx /usr/local/bin/uvx \
@@ -36,6 +38,7 @@ RUN wget -qO- https://astral.sh/uv/install.sh | sh \
 
 ENV PATH="/opt/venv/bin:${PATH}"
 
+# --- install comfy-cli ---
 RUN uv pip install comfy-cli pip setuptools wheel
 
 RUN if [ -n "${CUDA_VERSION_FOR_COMFY}" ]; then \
@@ -50,6 +53,7 @@ RUN if [ "$ENABLE_PYTORCH_UPGRADE" = "true" ]; then \
 
 WORKDIR /comfyui
 
+# --- custom nodes ---
 RUN mkdir -p custom_nodes && cd custom_nodes && \
     git clone https://github.com/city96/ComfyUI-GGUF.git && \
     git clone https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git
@@ -57,6 +61,7 @@ RUN mkdir -p custom_nodes && cd custom_nodes && \
 RUN cd custom_nodes/ComfyUI-GGUF && if [ -f requirements.txt ]; then uv pip install -r requirements.txt; fi
 RUN cd custom_nodes/ComfyUI-VideoHelperSuite && if [ -f requirements.txt ]; then uv pip install -r requirements.txt; fi
 
+# --- extra config + deps ---
 ADD src/extra_model_paths.yaml ./
 WORKDIR /
 RUN uv pip install runpod requests websocket-client
@@ -68,63 +73,27 @@ RUN chmod +x /usr/local/bin/comfy-node-install
 COPY scripts/comfy-manager-set-mode.sh /usr/local/bin/comfy-manager-set-mode
 RUN chmod +x /usr/local/bin/comfy-manager-set-mode
 
-CMD ["/start.sh"]
-
-FROM base AS downloader
-
-ARG HUGGINGFACE_ACCESS_TOKEN
-
+# --- download models directly from public S3 ---
 WORKDIR /comfyui
-RUN mkdir -p models/unet models/clip models/clip_vision models/vae
+RUN mkdir -p models/unet models/clip models/clip_vision models/vae && \
+    echo "📥 Downloading UNet..." && \
+    curl -L -o models/unet/wan2.1-i2v-14b-480p-Q8_0.gguf \
+      "https://comfyui-models-mirror-xxx.s3.eu-west-1.amazonaws.com/models/unet/wan2.1-i2v-14b-480p-Q8_0.gguf" && \
+    echo "📥 Downloading CLIP..." && \
+    curl -L -o models/clip/umt5_xxl_fp8_e4m3fn_scaled.safetensors \
+      "https://comfyui-models-mirror-xxx.s3.eu-west-1.amazonaws.com/models/clip/umt5_xxl_fp8_e4m3fn_scaled.safetensors" && \
+    echo "📥 Downloading CLIP Vision..." && \
+    curl -L -o models/clip_vision/clip_vision_h.safetensors \
+      "https://comfyui-models-mirror-xxx.s3.eu-west-1.amazonaws.com/models/clip_vision/clip_vision_h.safetensors" && \
+    echo "📥 Downloading VAE..." && \
+    curl -L -o models/vae/wan_2.1_vae.safetensors \
+      "https://comfyui-models-mirror-xxx.s3.eu-west-1.amazonaws.com/models/vae/wan_2.1_vae.safetensors"
 
-# Validate token
-RUN if [ -z "$HUGGINGFACE_ACCESS_TOKEN" ]; then \
-      echo "ERROR: HUGGINGFACE_ACCESS_TOKEN build arg is required!"; \
-      exit 1; \
-    fi
+# --- final health check ---
+RUN echo "🔍 Verifying model files..." && \
+    ls -lh models/unet/wan2.1-i2v-14b-480p-Q8_0.gguf && \
+    ls -lh models/clip/umt5_xxl_fp8_e4m3fn_scaled.safetensors && \
+    ls -lh models/clip_vision/clip_vision_h.safetensors && \
+    ls -lh models/vae/wan_2.1_vae.safetensors
 
-# Download models with progress and error handling
-RUN echo "🚀 Starting model downloads..." && \
-    \
-    echo "📥 [1/4] Downloading UNet model (largest - ~8GB)..." && \
-    wget --progress=bar:force --header="Authorization: Bearer ${HUGGINGFACE_ACCESS_TOKEN}" \
-         --timeout=600 --tries=3 \
-         -O models/unet/wan2.1-i2v-14b-480p-Q8_0.gguf \
-         "https://huggingface.co/city96/Wan2.1-I2V-14B-480P-gguf/resolve/main/wan2.1-i2v-14b-480p-Q8_0.gguf" && \
-    echo "✅ UNet model downloaded successfully" && \
-    \
-    echo "📥 [2/4] Downloading CLIP model..." && \
-    wget --progress=bar:force --header="Authorization: Bearer ${HUGGINGFACE_ACCESS_TOKEN}" \
-         --timeout=300 --tries=3 \
-         -O models/clip/umt5_xxl_fp8_e4m3fn_scaled.safetensors \
-         "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/clip/umt5_xxl_fp8_e4m3fn_scaled.safetensors" && \
-    echo "✅ CLIP model downloaded successfully" && \
-    \
-    echo "📥 [3/4] Downloading CLIP Vision model..." && \
-    wget --progress=bar:force --header="Authorization: Bearer ${HUGGINGFACE_ACCESS_TOKEN}" \
-         --timeout=300 --tries=3 \
-         -O models/clip_vision/clip_vision_h.safetensors \
-         "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/clip_vision/clip_vision_h.safetensors" && \
-    echo "✅ CLIP Vision model downloaded successfully" && \
-    \
-    echo "📥 [4/4] Downloading VAE model..." && \
-    wget --progress=bar:force --header="Authorization: Bearer ${HUGGINGFACE_ACCESS_TOKEN}" \
-         --timeout=300 --tries=3 \
-         -O models/vae/wan_2.1_vae.safetensors \
-         "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/vae/wan_2.1_vae.safetensors" && \
-    echo "✅ VAE model downloaded successfully" && \
-    \
-    echo "🎉 All models downloaded successfully!" && \
-    \
-    # Verify file sizes
-    echo "📊 Model file sizes:" && \
-    du -h models/unet/wan2.1-i2v-14b-480p-Q8_0.gguf && \
-    du -h models/clip/umt5_xxl_fp8_e4m3fn_scaled.safetensors && \
-    du -h models/clip_vision/clip_vision_h.safetensors && \
-    du -h models/vae/wan_2.1_vae.safetensors
-
-FROM base AS final
-COPY --from=downloader /comfyui/models /comfyui/models
-
-# Final image cleanup - remove any token traces
-ENV HUGGINGFACE_ACCESS_TOKEN=""
+CMD ["/start.sh"]
