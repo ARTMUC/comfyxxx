@@ -37,9 +37,11 @@ ENV PATH="/opt/venv/bin:${PATH}"
 
 # --- install comfy-cli ---
 RUN uv pip install comfy-cli pip setuptools wheel
-# Force latest ComfyUI with explicit git clone
-RUN git clone https://github.com/comfyanonymous/ComfyUI.git /comfyui-git && \
-    cp -r /comfyui-git/* /comfyui/ || true
+RUN if [ -n "${CUDA_VERSION_FOR_COMFY}" ]; then \
+      /usr/bin/yes | comfy --workspace /comfyui install --version "${COMFYUI_VERSION}" --cuda-version "${CUDA_VERSION_FOR_COMFY}" --nvidia; \
+    else \
+      /usr/bin/yes | comfy --workspace /comfyui install --version "${COMFYUI_VERSION}" --nvidia; \
+    fi
 
 RUN if [ "$ENABLE_PYTORCH_UPGRADE" = "true" ]; then \
       uv pip install --force-reinstall torch torchvision torchaudio --index-url ${PYTORCH_INDEX_URL}; \
@@ -50,11 +52,13 @@ WORKDIR /comfyui
 # --- custom nodes ---
 RUN mkdir -p custom_nodes && cd custom_nodes && \
     git clone https://github.com/city96/ComfyUI-GGUF.git && \
-    git clone https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git
+    git clone https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git && \
+    git clone https://github.com/kijai/ComfyUI-WanVideoWrapper.git
 
 # Install requirements for each custom node
 RUN cd custom_nodes/ComfyUI-GGUF && if [ -f requirements.txt ]; then uv pip install -r requirements.txt; fi
 RUN cd custom_nodes/ComfyUI-VideoHelperSuite && if [ -f requirements.txt ]; then uv pip install -r requirements.txt; fi
+RUN cd custom_nodes/ComfyUI-WanVideoWrapper && if [ -f requirements.txt ]; then uv pip install -r requirements.txt; fi
 
 # --- extra config + deps ---
 ADD src/extra_model_paths.yaml ./
